@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { ScoreBadge } from '@/components/dashboard/ScoreBadge';
 import { Button } from '@/components/ui/button';
@@ -21,10 +21,13 @@ import {
   ChevronDown,
   ArrowUpDown,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { mockTargets } from '@/data/mockData';
 import { TargetCompany } from '@/types';
 import { useNavigate } from 'react-router-dom';
+import { useCompanySearch, SearchedCompany } from '@/hooks/useCompanySearch';
+import { useToast } from '@/hooks/use-toast';
 
 type SortField = 'growthScore' | 'revenueEstimate' | 'employeeCount' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
@@ -38,22 +41,51 @@ function formatCurrency(value: number): string {
 
 const Targets = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const { isLoading, companies: apiCompanies, total, searchCompanies } = useCompanySearch();
+  
   const [searchQuery, setSearchQuery] = useState('');
   const [industryFilter, setIndustryFilter] = useState<string>('all');
   const [scoreFilter, setScoreFilter] = useState<string>('all');
   const [sortField, setSortField] = useState<SortField>('growthScore');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [useRealData, setUseRealData] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // Combine mock data with API results
+  const allTargets = useMemo(() => {
+    if (useRealData && apiCompanies.length > 0) {
+      // Convert API companies to TargetCompany format
+      return apiCompanies.map((c): TargetCompany => ({
+        id: c.id,
+        companyName: c.companyName,
+        industry: c.industry,
+        website: c.website,
+        revenueEstimate: c.revenueEstimate,
+        employeeCount: c.employeeCount,
+        growthScore: c.growthScore,
+        fundingStage: c.fundingStage,
+        lastFundingDate: c.lastFundingDate || '',
+        aiSummary: c.aiSummary,
+        whyFlagged: c.whyFlagged,
+        location: c.location,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+    return mockTargets;
+  }, [useRealData, apiCompanies]);
 
   const industries = useMemo(() => {
-    const unique = [...new Set(mockTargets.map((t) => t.industry))];
+    const unique = [...new Set(allTargets.map((t) => t.industry))];
     return unique.sort();
-  }, []);
+  }, [allTargets]);
 
   const filteredAndSortedTargets = useMemo(() => {
-    let result = [...mockTargets];
+    let result = [...allTargets];
 
-    // Apply search filter
-    if (searchQuery) {
+    // Apply search filter (only for local filtering, not API)
+    if (searchQuery && !useRealData) {
       const query = searchQuery.toLowerCase();
       result = result.filter(
         (t) =>
@@ -86,7 +118,28 @@ const Targets = () => {
     });
 
     return result;
-  }, [searchQuery, industryFilter, scoreFilter, sortField, sortDirection]);
+  }, [allTargets, searchQuery, industryFilter, scoreFilter, sortField, sortDirection, useRealData]);
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      toast({
+        title: 'Enter a search query',
+        description: 'Please enter a company name or keyword to search',
+      });
+      return;
+    }
+    setUseRealData(true);
+    setHasSearched(true);
+    await searchCompanies(searchQuery, industryFilter !== 'all' ? industryFilter : undefined, 25);
+  };
+
+  const handleRefresh = async () => {
+    if (hasSearched && searchQuery) {
+      await searchCompanies(searchQuery, industryFilter !== 'all' ? industryFilter : undefined, 25);
+    } else {
+      setUseRealData(false);
+    }
+  };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -113,12 +166,17 @@ const Targets = () => {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Search companies, industries, locations..."
+            placeholder="Search companies via Apollo API..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             className="pl-10"
           />
         </div>
+        <Button onClick={handleSearch} disabled={isLoading} className="gap-2">
+          {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+          Search Apollo
+        </Button>
         <div className="flex gap-2">
           <Select value={industryFilter} onValueChange={setIndustryFilter}>
             <SelectTrigger className="w-[180px]">
@@ -146,8 +204,8 @@ const Targets = () => {
               <SelectItem value="0-49">0-49 (Low)</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" className="gap-2">
-            <RefreshCw className="w-4 h-4" />
+          <Button variant="outline" className="gap-2" onClick={handleRefresh} disabled={isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Refresh
           </Button>
           <Button variant="outline" className="gap-2">
@@ -163,13 +221,17 @@ const Targets = () => {
           <Sparkles className="w-5 h-5 text-primary animate-pulse" />
         </div>
         <div className="flex-1">
-          <p className="text-sm font-medium text-foreground">AI Deal Sourcing Active</p>
+          <p className="text-sm font-medium text-foreground">
+            {useRealData ? 'Apollo API Connected' : 'AI Deal Sourcing Active'}
+          </p>
           <p className="text-xs text-muted-foreground">
-            Scanning 500+ sources • Last updated: 2 hours ago • Next scan in 4 hours
+            {useRealData 
+              ? `Found ${total} companies matching "${searchQuery}"`
+              : 'Showing demo data • Search to query Apollo API for real companies'}
           </p>
         </div>
-        <Button size="sm" className="gap-2">
-          <RefreshCw className="w-4 h-4" />
+        <Button size="sm" className="gap-2" onClick={handleSearch} disabled={isLoading || !searchQuery}>
+          {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           Run Now
         </Button>
       </div>
